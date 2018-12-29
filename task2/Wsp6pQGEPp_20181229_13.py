@@ -5,12 +5,17 @@ import numpy as np
 import pandas as pd
 import pickle
 
-with open('/var/www/html/information_theory/feima/uploads/Wsp6pQGEPp_20181227_0.pkl', 'rb') as f:
+with open('/var/www/html/information_theory/feima/uploads/s300.pkl', 'rb') as f:
     (stock_to_id, id_to_stock) = pickle.load(f)
 
-m = 512 # num of stocks we use
+m = 300 # num of stocks we use
+max_n = 6000
+
+data_mat = np.ones((m, max_n))*-1
+
 _step = 0
-step = 100
+step = 1
+all_step = 0
 B = []
 stock_state = np.zeros(m, dtype=int)
 
@@ -22,9 +27,8 @@ def time_to_id(time):
     return time_dict[time]
 
 def build_mat(ss, history_stock_data):
+    global data_mat
     '''returns a m x s data matrix'''
-    n = time_to_id(ss) + 1
-    mat = np.ones((m, n))*-1
     df = history_stock_data
     for ind, row in df.iterrows():
         s = row['Stock Code']
@@ -34,9 +38,8 @@ def build_mat(ss, history_stock_data):
         p = row['Opening Price']
         s_id = stock_to_id[s]
         t_id = time_to_id(t)
-        if s_id < m and t_id < n:
-            mat[s_id, t_id] = p
-    return mat
+        if s_id < m and t_id < max_n:
+            data_mat[s_id, t_id] = p
 
 def predict_next_x(P, index, w=5):
     t = index-1
@@ -55,7 +58,7 @@ def predict_next_x(P, index, w=5):
 
 def predict_next_b(B, P, mask, index, epsilon, w=5):
     t = index-1
-    b_t = B[t]
+    b_t = B[-1]
     x_t1 = predict_next_x(P, index, w)
     x_mean = np.mean(x_t1)
     #print(x_t1, x_mean)
@@ -92,7 +95,11 @@ def update_state(money, mask, pv, bv):
     global stock_state
     #print(stock_state)
     old_state = stock_state
-    all_money = money
+    all_money = money 
+    for k in range(m):
+        if pv[k] > 0:
+            all_money += pv[k] * stock_state[k]
+    all_money = all_money*0.8
     new_state = np.zeros(m, dtype=int)
     for i in range(m):
         if pv[i] > 0:
@@ -108,12 +115,12 @@ def update_state(money, mask, pv, bv):
             buy_code.append(id_to_stock[i])
             buy_num.append(new_state[i] - old_state[i])
     stock_state = new_state
+    #print(buy_code)
     return sell_code, sell_num, buy_code, buy_num
 
-def invest(data_mat, money, mask, w=1, epsilon=1.00001):
+def invest(data_mat, n, money, mask, w=1, epsilon=1.00001):
     global B
     
-    n = data_mat.shape[1]-1
     P = data_mat
     '''
     X = np.ones_like(P)
@@ -130,11 +137,11 @@ def invest(data_mat, money, mask, w=1, epsilon=1.00001):
         b = predict_next_b(B, P, mask, n, epsilon, w)
         B.append(b)
     #print('B:', B[-1])
-    sell_code, sell_num, buy_code, buy_num = update_state(money, mask, P[-1], B[-1])
+    sell_code, sell_num, buy_code, buy_num = update_state(money, mask, P[n], B[-1])
     return sell_code, sell_num, buy_code, buy_num
 
 def get_avail(hist, tt):
-    mask = np.zeros(512)
+    mask = np.zeros(m)
     for ind, row in hist.iterrows():
         s = row['Stock Code']
         t = row['Time']
@@ -148,25 +155,27 @@ def get_avail(hist, tt):
     
 def model(s, money, history_stock_data, investment_data):
     #path='/var/www/html/information_theory/feima/test_data.csv'
-    global _step
+    global _step, all_step
+    all_step += 1
+        
+    w=5
+    epsilon=1.000000001
     
-    if _step > 0:
+    if _step > 0 or all_step > 10:
         _step -= 1
         add_data=pd.DataFrame(columns=['Time','Stocks you sell','Corresponding number of stocks you sell',
         'Stocks you buy','Corresponding number of stocks you buy']) 
         add_data=add_data.append({'Time': s}, ignore_index=True)
-        B.append(B[-1])
         return add_data
     
-    _step = step-1
-        
-    w=1200
-    epsilon=1.00001
-    history_stock_data = history_stock_data[-w*520:]
     ss = str(s)
+    history_stock_data = history_stock_data[-w*520:]
+    history_stock_data = history_stock_data.loc[history_stock_data['Time'] == s]
+    build_mat(ss, history_stock_data)
+    
+    _step = step-1
     mask = get_avail(history_stock_data, s)
-    data_mat = build_mat(ss, history_stock_data)
-    sell_code, sell_num, buy_code, buy_num = invest(data_mat, money, mask, w=w, epsilon=epsilon)    
+    sell_code, sell_num, buy_code, buy_num = invest(data_mat, time_to_id(ss), money, mask, w=w, epsilon=epsilon)    
     
     add_data=pd.DataFrame(columns=['Time','Stocks you sell','Corresponding number of stocks you sell',
                                    'Stocks you buy','Corresponding number of stocks you buy']) 
